@@ -1,0 +1,157 @@
+services:
+  # PostgreSQL pour les données
+  postgres:
+    image: postgres:13
+    container_name: postgres_bdia
+    environment:
+      POSTGRES_USER: bdia_user
+      POSTGRES_PASSWORD: bdia_pass
+      POSTGRES_DB: bdia_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    command: ["postgres", "-c", "log_statement=all", "-c", "max_connections=100"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bdia_user -d bdia_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  # pgAdmin pour l'administration
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin_bdia
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@bdia.com
+      PGADMIN_DEFAULT_PASSWORD: secure_admin_pass
+    ports:
+      - "5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  # MongoDB pour les logs
+  mongo:
+    image: mongo:5
+    container_name: mongo_logs
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: mongo_user
+      MONGO_INITDB_ROOT_PASSWORD: mongo_pass
+      MONGO_INITDB_DATABASE: logs_db
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodata:/data/db
+    healthcheck:
+      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  # Mongo Express
+  mongo-express:
+    image: mongo-express:latest
+    container_name: mongo_express_logs
+    environment:
+      ME_CONFIG_MONGODB_SERVER: mongo
+      ME_CONFIG_MONGODB_ADMINUSERNAME: mongo_user
+      ME_CONFIG_MONGODB_ADMINPASSWORD: mongo_pass
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: secure_mongo_pass
+    ports:
+      - "8081:8081"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  # Elasticsearch pour le SIEM
+  elasticsearch:
+    image: elasticsearch:8.7.0
+    container_name: elasticsearch_bdia
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=true
+      - ELASTIC_PASSWORD=elastic_pass
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -u elastic:elastic_pass -s http://localhost:9200/_cat/health | grep green"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  # Kibana pour la visualisation
+  kibana:
+    image: kibana:8.7.0
+    container_name: kibana_bdia
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=elastic
+      - ELASTICSEARCH_PASSWORD=elastic_pass
+    ports:
+      - "5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-s", "http://localhost:5601/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  # Logstash pour traiter les logs
+  logstash:
+    image: logstash:8.7.0
+    container_name: logstash_bdia
+    volumes:
+      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
+    environment:
+      - xpack.security.enabled=true
+      - ELASTICSEARCH_USERNAME=elastic
+      - ELASTICSEARCH_PASSWORD=elastic_pass
+      - "LS_JAVA_OPTS=-Xmx256m -Xms256m"
+    ports:
+      - "5044:5044"
+      - "9600:9600"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-s", "http://localhost:9600"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  pgdata:
+  mongodata:
+  esdata:
